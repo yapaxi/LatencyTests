@@ -12,11 +12,18 @@ namespace LatencyTests
 {
     class Program
     {
+        private static readonly int MAX_CONNECTIONS_PER_SERVER = int.MaxValue;
+
         private static readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
+
+#if NETSTANDARD2_0
         private static readonly HttpClient _httpClient = new HttpClient(new HttpClientHandler()
         {
-           
+            MaxConnectionsPerServer  = MAX_CONNECTIONS_PER_SERVER
         });
+#else 
+        private static readonly HttpClient _httpClient = new HttpClient();
+#endif
 
         static async Task TimeCheck(TimeSpan maxTime, CancellationTokenSource timeoutTokenSource)
         {
@@ -42,15 +49,17 @@ namespace LatencyTests
 
         static void Main(string[] args)
         {
+            ServicePointManager.DefaultConnectionLimit = MAX_CONNECTIONS_PER_SERVER;
+
             Console.CancelKeyPress += Console_CancelKeyPress;
-            ServicePointManager.DefaultConnectionLimit = 100500;
             var url = args.Length > 0 ? args[0] : throw new Exception("Url is required as a first argument");
             var concurrentCalls = args.Length > 1 ? int.Parse(args[1]) : 2;
             var seconds = args.Length > 2 ? int.Parse(args[2]) : 60;
             var repeat = args.Length > 3 ? int.Parse(args[3]) : 1;
             var delay = TimeSpan.FromMilliseconds(args.Length > 4 ? int.Parse(args[4]) : 0);
+            var auth = args.Length > 5 ? args[5]?.Trim() : null;
 
-            Warmup(url, concurrentCalls);
+            Warmup(url, concurrentCalls, auth);
 
             var loadTimeout = TimeSpan.FromSeconds(seconds);
             Console.Write("Start... ");
@@ -70,7 +79,7 @@ namespace LatencyTests
             {
                 if (!_cancellationTokenSource.IsCancellationRequested)
                 {
-                    var list = Run(url, concurrentCalls, loadTimeout, delay);
+                    var list = Run(url, concurrentCalls, loadTimeout, delay, auth);
 
                     var httpsCodes = list.SelectMany(e => e).Select(e => e.Key).Distinct().ToArray();
                     foreach (var httpCode in httpsCodes)
@@ -107,12 +116,12 @@ namespace LatencyTests
             Console.WriteLine($"done; total-time: {sw.Elapsed}");
         }
 
-        private static void Warmup(string url, int concurrentCalls)
+        private static void Warmup(string url, int concurrentCalls, string auth)
         {
             var testTimeout = TimeSpan.FromSeconds(5);
             Console.Write("Warmup... ");
             Console.WriteLine($"Running for {testTimeout}");
-            var z = Run(url, concurrentCalls, testTimeout, TimeSpan.Zero);
+            var z = Run(url, concurrentCalls, testTimeout, TimeSpan.Zero, auth);
         }
 
         private static double GetPercentile(TimeSpan[] durations, int p)
@@ -128,7 +137,8 @@ namespace LatencyTests
             string url, 
             int concurrentCalls, 
             TimeSpan timeout,
-            TimeSpan delay)
+            TimeSpan delay,
+            string auth)
         {
             var timeoutTokenSource = new CancellationTokenSource();
             var timeCheckTask = TimeCheck(timeout, timeoutTokenSource);
@@ -139,7 +149,7 @@ namespace LatencyTests
             {
                 var t = new Thread(() =>
                 {
-                    var dict = Loop(url, null, timeoutTokenSource, delay).GetAwaiter().GetResult();
+                    var dict = Loop(url, null, timeoutTokenSource, delay, auth).GetAwaiter().GetResult();
                     lock (list)
                     {
                         list.Add(dict);
@@ -162,7 +172,12 @@ namespace LatencyTests
             _cancellationTokenSource.Cancel();
         }
 
-        private static async Task<IReadOnlyDictionary<HttpStatusCode, Record>> Loop(string url, int? limit, CancellationTokenSource timeoutTokenSource, TimeSpan delay)
+        private static async Task<IReadOnlyDictionary<HttpStatusCode, Record>> Loop(
+            string url,
+            int? limit,
+            CancellationTokenSource timeoutTokenSource,
+            TimeSpan delay,
+            string auth)
         {
             var dict = new Dictionary<HttpStatusCode, Record>();
             var maxCalls = limit ?? Int32.MaxValue;
@@ -174,9 +189,14 @@ namespace LatencyTests
                     && !timeoutTokenSource.IsCancellationRequested
                     && --maxCalls > 0)
                 {
+                    var message = new HttpRequestMessage(HttpMethod.Get, url);
+                    if (!string.IsNullOrWhiteSpace(auth))
+                    {
+                        message.Headers.Add("Authorization", auth);
+                    }
                     var sw = Stopwatch.StartNew();
                     var response = await _httpClient.SendAsync(
-                        new HttpRequestMessage(HttpMethod.Get, url),
+                        message,
                         _cancellationTokenSource.Token
                     );
                     await response.Content.ReadAsStringAsync();
