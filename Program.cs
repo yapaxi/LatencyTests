@@ -52,35 +52,21 @@ namespace LatencyTests
             ServicePointManager.DefaultConnectionLimit = MAX_CONNECTIONS_PER_SERVER;
 
             Console.CancelKeyPress += Console_CancelKeyPress;
-            var url = args.Length > 0 ? args[0] : throw new Exception("Url is required as a first argument");
-            var concurrentCalls = args.Length > 1 ? int.Parse(args[1]) : 2;
-            var seconds = args.Length > 2 ? int.Parse(args[2]) : 60;
-            var repeat = args.Length > 3 ? int.Parse(args[3]) : 1;
-            var delay = TimeSpan.FromMilliseconds(args.Length > 4 ? int.Parse(args[4]) : 0);
-            var auth = args.Length > 5 ? args[5]?.Trim() : null;
 
-            var settings = new Settings()
-            {
-                AuthorizationHeader = auth,
-                ConcurrentCalls = concurrentCalls,
-                Delay = delay,
-                Limit = null,
-                Timeout = TimeSpan.FromSeconds(seconds),
-                Url = url
-            };
+            var settings = ResolveSettings(args);
 
             Warmup(settings.WithTimeout(TimeSpan.FromSeconds(5)));
-            
+
             Console.Write("Start... ");
-            Console.WriteLine($"Running for {settings.Timeout} using {concurrentCalls} threads and repeating {repeat} times with {delay} delay");
+            Console.WriteLine($"Running for {settings.Timeout} using {settings.ConcurrentCalls} threads and repeating {settings.Repeat} times with {settings.Delay} delay");
 
             const string SEP = "-------";
             var headerSep = $"{SEP}\t{SEP}\t{SEP}\t{SEP}\t{SEP}";
             Console.WriteLine(headerSep);
-            Console.WriteLine("Code\tCount\tSTDev\tAvg\tPercentiles (5,25,50,75,95,99)");
+            Console.WriteLine($"Code\tCount\tSTDev\tAvg\tPercentiles ({string.Join(",", settings.PerncentilesToCalculate)})");
             Console.WriteLine(headerSep);
 
-            var rem = repeat;
+            var rem = settings.Repeat;
 
             var sw = Stopwatch.StartNew();
             while (--rem >= 0)
@@ -108,20 +94,61 @@ namespace LatencyTests
                                     ? Math.Sqrt(orderedDurations.Select(e => Math.Pow(e.TotalMilliseconds - avg, 2)).Sum() / (orderedDurations.Length - 1.0))
                                     : 0, 2);
 
-                        var p5 = GetPercentile(orderedDurations, 5);
-                        var p25 = GetPercentile(orderedDurations, 25);
-                        var p50 = GetPercentile(orderedDurations, 50);
-                        var p75 = GetPercentile(orderedDurations, 75);
-                        var p95 = GetPercentile(orderedDurations, 95);
-                        var p99 = GetPercentile(orderedDurations, 99);
+                        var percentilesResult = string.Join(
+                            ", ",
+                            settings.PerncentilesToCalculate.Select(e => GetPercentile(orderedDurations, e))
+                        );
 
-                        Console.WriteLine($"{httpCode}\t{count}\t{stdev}\t{avg}\t{p5}, {p25}, {p50}, {p75}, {p95}, {p99}");
+                        Console.WriteLine($"{httpCode}\t{count}\t{stdev}\t{avg}\t{percentilesResult}");
                     }
                 }
             }
 
             Console.WriteLine();
             Console.WriteLine($"done; total-time: {sw.Elapsed}");
+        }
+
+        private static Settings ResolveSettings(string[] args)
+        {
+            //0
+            var url = args.Length > 0 ? args[0] : throw new Exception("Url is required as a first argument");
+
+            //1
+            var concurrentCalls = args.Length > 1 ? int.Parse(args[1]) : 2;
+
+            //2
+            var seconds = args.Length > 2 ? int.Parse(args[2]) : 60;
+
+            //3
+            var repeat = args.Length > 3 ? int.Parse(args[3]) : 1;
+
+            //4
+            var delay = TimeSpan.FromMilliseconds(args.Length > 4 ? int.Parse(args[4]) : 0);
+
+            //5
+            var auth = args.Length > 5 ? args[5]?.Trim() : null;
+
+            //6
+            var percentilesDefault = new[] { 5, 25, 50, 75, 95, 99 };
+            var percentilesToCalculate = (args.Length > 6
+                ? args[6].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).ToArray()
+                : percentilesDefault
+            )
+            .Where(e => e >= 0 && e <= 100)
+            .ToArray();
+
+            var settings = new Settings()
+            {
+                Repeat = repeat,
+                AuthorizationHeader = auth,
+                ConcurrentCalls = concurrentCalls,
+                Delay = delay,
+                Limit = null,
+                Timeout = TimeSpan.FromSeconds(seconds),
+                Url = url,
+                PerncentilesToCalculate = percentilesToCalculate
+            };
+            return settings;
         }
 
         private static void Warmup(Settings settings)
@@ -228,12 +255,14 @@ namespace LatencyTests
 
         private class Settings
         {
+            public int Repeat { get; set; }
             public TimeSpan Timeout { get; set; }
             public string Url { get; set; }
             public int? Limit { get; set; }
             public TimeSpan Delay { get; set; }
             public string AuthorizationHeader { get; set; }
             public int ConcurrentCalls { get; set; }
+            public int[] PerncentilesToCalculate { get; set; }
 
             public Settings WithTimeout(TimeSpan timeSpan)
             {
@@ -244,7 +273,9 @@ namespace LatencyTests
                     ConcurrentCalls = this.ConcurrentCalls,
                     Delay = this.Delay,
                     Limit = this.Limit,
-                    Url = this.Url
+                    Url = this.Url,
+                    PerncentilesToCalculate = this.PerncentilesToCalculate,
+                    Repeat = this.Repeat
                 };
             }
         }
