@@ -59,12 +59,20 @@ namespace LatencyTests
             var delay = TimeSpan.FromMilliseconds(args.Length > 4 ? int.Parse(args[4]) : 0);
             var auth = args.Length > 5 ? args[5]?.Trim() : null;
 
-            Warmup(url, concurrentCalls, auth);
+            var settings = new Settings()
+            {
+                AuthorizationHeader = auth,
+                ConcurrentCalls = concurrentCalls,
+                Delay = delay,
+                Limit = null,
+                Timeout = TimeSpan.FromSeconds(seconds),
+                Url = url
+            };
 
-            var loadTimeout = TimeSpan.FromSeconds(seconds);
+            Warmup(settings.WithTimeout(TimeSpan.FromSeconds(5)));
+            
             Console.Write("Start... ");
-            Console.WriteLine($"Running for {loadTimeout} using {concurrentCalls} threads and repeating {repeat} times with {delay} delay");
-
+            Console.WriteLine($"Running for {settings.Timeout} using {concurrentCalls} threads and repeating {repeat} times with {delay} delay");
 
             const string SEP = "-------";
             var headerSep = $"{SEP}\t{SEP}\t{SEP}\t{SEP}\t{SEP}";
@@ -79,7 +87,7 @@ namespace LatencyTests
             {
                 if (!_cancellationTokenSource.IsCancellationRequested)
                 {
-                    var list = Run(url, concurrentCalls, loadTimeout, delay, auth);
+                    var list = Run(settings);
 
                     var httpsCodes = list.SelectMany(e => e).Select(e => e.Key).Distinct().ToArray();
                     foreach (var httpCode in httpsCodes)
@@ -116,12 +124,11 @@ namespace LatencyTests
             Console.WriteLine($"done; total-time: {sw.Elapsed}");
         }
 
-        private static void Warmup(string url, int concurrentCalls, string auth)
+        private static void Warmup(Settings settings)
         {
-            var testTimeout = TimeSpan.FromSeconds(5);
             Console.Write("Warmup... ");
-            Console.WriteLine($"Running for {testTimeout}");
-            var z = Run(url, concurrentCalls, testTimeout, TimeSpan.Zero, auth);
+            Console.WriteLine($"Running for {settings.Timeout}");
+            var z = Run(settings);
         }
 
         private static double GetPercentile(TimeSpan[] durations, int p)
@@ -133,23 +140,18 @@ namespace LatencyTests
                         : TimeSpan.Zero).TotalMilliseconds, 2);
         }
 
-        private static List<IReadOnlyDictionary<HttpStatusCode, Record>> Run(
-            string url, 
-            int concurrentCalls, 
-            TimeSpan timeout,
-            TimeSpan delay,
-            string auth)
+        private static List<IReadOnlyDictionary<HttpStatusCode, Record>> Run(Settings settings)
         {
             var timeoutTokenSource = new CancellationTokenSource();
-            var timeCheckTask = TimeCheck(timeout, timeoutTokenSource);
+            var timeCheckTask = TimeCheck(settings.Timeout, timeoutTokenSource);
 
             var list = new List<IReadOnlyDictionary<HttpStatusCode, Record>>();
 
-            var threads = Enumerable.Range(0, concurrentCalls).Select(e =>
+            var threads = Enumerable.Range(0, settings.ConcurrentCalls).Select(e =>
             {
                 var t = new Thread(() =>
                 {
-                    var dict = Loop(url, null, timeoutTokenSource, delay, auth).GetAwaiter().GetResult();
+                    var dict = Loop(settings, timeoutTokenSource).GetAwaiter().GetResult();
                     lock (list)
                     {
                         list.Add(dict);
@@ -172,15 +174,10 @@ namespace LatencyTests
             _cancellationTokenSource.Cancel();
         }
 
-        private static async Task<IReadOnlyDictionary<HttpStatusCode, Record>> Loop(
-            string url,
-            int? limit,
-            CancellationTokenSource timeoutTokenSource,
-            TimeSpan delay,
-            string auth)
+        private static async Task<IReadOnlyDictionary<HttpStatusCode, Record>> Loop(Settings settings, CancellationTokenSource timeoutTokenSource)
         {
             var dict = new Dictionary<HttpStatusCode, Record>();
-            var maxCalls = limit ?? Int32.MaxValue;
+            var maxCalls = settings.Limit ?? Int32.MaxValue;
 
             try
             {
@@ -189,10 +186,10 @@ namespace LatencyTests
                     && !timeoutTokenSource.IsCancellationRequested
                     && --maxCalls > 0)
                 {
-                    var message = new HttpRequestMessage(HttpMethod.Get, url);
-                    if (!string.IsNullOrWhiteSpace(auth))
+                    var message = new HttpRequestMessage(HttpMethod.Get, settings.Url);
+                    if (!string.IsNullOrWhiteSpace(settings.AuthorizationHeader))
                     {
-                        message.Headers.Add("Authorization", auth);
+                        message.Headers.Add("Authorization", settings.AuthorizationHeader);
                     }
                     var sw = Stopwatch.StartNew();
                     var response = await _httpClient.SendAsync(
@@ -215,9 +212,9 @@ namespace LatencyTests
                     val.Durations.Add(el);
                     dict[response.StatusCode] = val;
                     
-                    if (delay >= TimeSpan.Zero)
+                    if (settings.Delay >= TimeSpan.Zero)
                     {
-                        await Task.Delay(delay);
+                        await Task.Delay(settings.Delay);
                     }
                 }
             }
@@ -227,6 +224,29 @@ namespace LatencyTests
             }
 
             return dict;
+        }
+
+        private class Settings
+        {
+            public TimeSpan Timeout { get; set; }
+            public string Url { get; set; }
+            public int? Limit { get; set; }
+            public TimeSpan Delay { get; set; }
+            public string AuthorizationHeader { get; set; }
+            public int ConcurrentCalls { get; set; }
+
+            public Settings WithTimeout(TimeSpan timeSpan)
+            {
+                return new Settings()
+                {
+                    Timeout = timeSpan,
+                    AuthorizationHeader = this.AuthorizationHeader,
+                    ConcurrentCalls = this.ConcurrentCalls,
+                    Delay = this.Delay,
+                    Limit = this.Limit,
+                    Url = this.Url
+                };
+            }
         }
 
         private class Record
