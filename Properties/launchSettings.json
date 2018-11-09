@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "LatencyTests": {
+      "commandName": "Project",
+      "commandLineArgs": "\"https://acc.login.albelli.com/v2/.well-known/jwks\" 2 10 2"
+    }
+  }
+}

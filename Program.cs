@@ -55,21 +55,22 @@ namespace LatencyTests
 
             var settings = ResolveSettings(args);
 
+            Console.WriteLine($"URL: {settings.Url}");
+
             Warmup(settings.WithTimeout(TimeSpan.FromSeconds(5)));
 
-            Console.Write("Start... ");
-            Console.WriteLine($"Running for {settings.Timeout} using {settings.ConcurrentCalls} threads and repeating {settings.Repeat} times with {settings.Delay} delay");
+            Console.WriteLine($"Settings: run for {settings.Timeout} using {settings.ConcurrentCalls} threads with {settings.Delay} delay between calls and repeat everything {settings.Repeat} times");
 
             const string SEP = "-------";
-            var headerSep = $"{SEP}\t{SEP}\t{SEP}\t{SEP}\t{SEP}";
+            var headerSep = $"{SEP}\t{SEP}\t{SEP}\t{SEP}\t{SEP}\t{SEP}";
             Console.WriteLine(headerSep);
-            Console.WriteLine($"Code\tCount\tSTDev\tAvg\tPercentiles ({string.Join(",", settings.PerncentilesToCalculate)})");
+            Console.WriteLine($"#\tCode\tCount\tSTDev\tAvg\tPercentiles ({string.Join(",", settings.PerncentilesToCalculate)})");
             Console.WriteLine(headerSep);
 
-            var rem = settings.Repeat;
+            var stage = 0;
 
             var sw = Stopwatch.StartNew();
-            while (--rem >= 0)
+            while (++stage <= settings.Repeat)
             {
                 if (!_cancellationTokenSource.IsCancellationRequested)
                 {
@@ -99,7 +100,7 @@ namespace LatencyTests
                             settings.PerncentilesToCalculate.Select(e => GetPercentile(orderedDurations, e))
                         );
 
-                        Console.WriteLine($"{httpCode}\t{count}\t{stdev}\t{avg}\t{percentilesResult}");
+                        Console.WriteLine($"{stage}\t{httpCode}\t{count}\t{stdev}\t{avg}\t{percentilesResult}");
                     }
                 }
             }
@@ -153,8 +154,8 @@ namespace LatencyTests
 
         private static void Warmup(Settings settings)
         {
-            Console.Write("Warmup... ");
-            Console.WriteLine($"Running for {settings.Timeout}");
+            Console.Write("Warmup: ");
+            Console.WriteLine($"run for {settings.Timeout}");
             var z = Run(settings);
         }
 
